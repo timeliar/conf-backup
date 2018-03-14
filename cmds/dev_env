@@ -1,0 +1,113 @@
+#!/bin/bash
+HOST_NAME=
+PORT=
+COMMENT=
+VERBOSE=
+
+
+show_help() {
+    cat <<EOF >&2
+Generate dev environment config (include hosts+nginx).
+Usage:  $0 [-h HOST_NAME] [-p PORT]
+        $0 -r
+        $0 -v
+    -h HOST_NAME
+        New System test hostname,required
+    -p
+        New System banding port,required
+    -r
+        Rollback /etc/hosts
+    -v verbose mode
+Example:  $0 -h example.com -p 8080
+EOF
+}
+
+while getopts ":h:p:c:rv" opt; do
+    case $opt in
+        h)
+            # set hostname
+            HOST_NAME="$OPTARG"
+            ;;
+        p)
+            PORT="$OPTARG"
+            ;;
+        c)
+            COMMENT="$OPTARG"
+            ;;
+        r)
+            if [ -e /etc/hosts.bak ];then
+                sudo cat /etc/hosts > /etc/hosts.bak2
+                sudo cat /etc/hosts.bak > /etc/hosts
+                sudo cat /etc/hosts.bak2 > /etc/hosts.bak
+                sudo rm /etc/hosts.bak2
+                echo "rollback success"
+                exit 0
+            else
+                echo "file /etc/hosts.bak not found"
+                exit 1
+            fi
+            ;;
+        v)
+            VERBOSE=1
+            ;;
+        \?)
+            echo "[-] Invalid option '-$OPTARG'" >&2
+            show_help
+            exit 1
+            ;;
+        :)
+            echo "[-] Option '-$OPTARG' requires an argument" >&2
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z $HOST_NAME ];then
+    echo "HOST_NAME required"
+    exit 1
+fi
+if [ -z $PORT ];then
+    echo "PORT required"
+    exit 1
+fi
+if [ -z $COMMENT ];then
+    echo "COMMENT required"
+    exit 1
+fi
+
+HOSTS_CONF="$(cat <<EOF
+# $COMMENT
+127.0.0.1 $HOST_NAME
+EOF
+)"
+NGINX_CONF="$(cat <<EOF
+server {
+    listen       80;
+    server_name  $HOST_NAME;
+    add_header 'Access-Control-Allow-Origin' '*' always;
+    add_header 'Access-Control-Allow-Credentials' 'true' always;
+    add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, OPTIONS' always;
+    add_header 'Access-Control-Max-Age' '86400' always;
+    location / {
+        proxy_read_timeout 600s;
+        # $COMMENT
+        proxy_pass http://127.0.0.1:$PORT;
+    }
+}
+EOF
+)"
+if [ $VERBOSE ];then
+    echo "hostname is $HOST_NAME"
+    echo "port is $PORT"
+    echo "comment is $COMMENT"
+    printf "hosts conf is \n$HOSTS_CONF\n"
+    printf "nginx conf is \n$NGINX_CONF\n"
+fi
+
+echo "need root permission:"
+sudo su -c "echo \"$NGINX_CONF\" > /etc/nginx/conf.d/$HOST_NAME.conf && nginx -s reload && cp /etc/hosts /etc/hosts.bak && echo \"$HOSTS_CONF\" >> /etc/hosts"
+if [ $VERBOSE ];then
+    echo "success"
+fi
+exit 0
